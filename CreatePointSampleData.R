@@ -4,12 +4,17 @@ library(sf)    # For reading geospatial data
 library (dplyr)
 library(spsurvey)
 setwd("~/FERIT_2/NISO/R_NISO")
+bird_code_list <- c("ALFL", "AMRE", "BAWW", "BBWA", "BHVI", "BLBW", "BRCR", "COYE",  "CSWA", "DEJU", "GCKI", "HETH")  # Add all required bird codes here
+#bird_code_list <- c("ALFL", "AMRE", "BBWA", "BHVI", "BLBW", "BRCR", "COYE",  "CSWA", "DEJU", "GCKI", "HETH")  # Add all required bird codes here
 
 #######################
 # code to create the point data file, combined_species_data
 
 # Define the path to the ESRI geodatabase
-gdb_path <- "D:/FERIT_1/NISO/Bird_Counts.gdb"
+#gdb_path <- "D:/FERIT_1/NISO/Bird_Counts.gdb"
+#gdb_path <- "D:/FERIT_1/NISO/HabitatAnalysis/GIS/Birds.gdb"
+gdb_path<- ("D:/FERIT_1/NISO/data_Nov_19_2024/MB_Birds_forRob.gdb")
+
 
 # Check if the geodatabase exists
 if (!file.exists(gdb_path)) {
@@ -22,8 +27,10 @@ gdb_layers <- st_layers(gdb_path)
 # Print the available layers
 print(gdb_layers)
 
-pointCount_layer <- st_read(gdb_path, layer = gdb_layers$name[2])  # NatureCounts_3, Pointcounts
-
+#pointCount_layer <- st_read(gdb_path, layer = gdb_layers$name[2])  # NatureCounts_3, Pointcounts
+#pointCount_layer <- st_read(gdb_path, layer = "ValidationBirds")
+pointCount_layer <- st_read(gdb_path, layer = "NatureCounts_FML_merged_DEP")
+#NatureCounts_FML_merged_DEP
 # Check the current CRS of the layer
 print(st_crs(pointCount_layer))
 
@@ -143,6 +150,10 @@ saveRDS(combined_species_data, file = "combined_species_data.rds")
 #########################
 # GRTS sample selection
 species_data_list <- list()
+remove(selected_spp_USAI)
+remove(selected_spp_sf)
+remove(selected_spp_maxCnt)
+
 for (species in bird_code_list) {
 
 #species <- "ALFL" #for testing only
@@ -160,27 +171,33 @@ selected_spp_maxCnt <- selected_spp_sf %>% group_by(SurveyAreaIdentifier) %>% fi
 nrow(selected_spp_maxCnt)
 # Now select unique values for plot (SurveyAreaIdentifer -- USAI)
 
+remove(selected_spp_USAI)
 selected_spp_USAI <- selected_spp_maxCnt %>%
   distinct(SurveyAreaIdentifier, .keep_all = TRUE)
 nrow(selected_spp_USAI)
 
-# Calculate 25% of records for each status
+# Calculate 75% of records for each status
 avail_count <- nrow(selected_spp_USAI[selected_spp_USAI$status == "avail", ])
 used_count <- nrow(selected_spp_USAI[selected_spp_USAI$status == "used", ])
-avail_25 <- round(0.25 * avail_count)
-used_25 <- round(0.25 * used_count)
-caty_n <- c(avail = avail_25, used = used_25)
-n_base_val = avail_25 + used_25
+# avail_25 <- round(0.25 * avail_count)
+# used_25 <- round(0.25 * used_count)
+# caty_n <- c(avail = avail_25, used = used_25)
+# n_base_val = avail_25 + used_25
+avail_75 <- round(0.75 * avail_count)
+used_75 <- round(0.75 * used_count)
+caty_n <- c(avail = avail_75, used = used_75)
+n_base_val = avail_75 + used_75
+
 
 #GRTS sample
 grts_result_train <- grts(selected_spp_USAI, n_base = n_base_val, caty_var = "status", caty_n = caty_n) #unequal inclusion probability
 
-plot(
-  grts_result_train,
-  formula = siteuse ~ status,
-  selected_spp_USAI,
-  key.width = lcm(3)
-)
+# plot(
+#   grts_result_train,
+#   formula = siteuse ~ status,
+#   selected_spp_USAI,
+#   key.width = lcm(3)
+# )
 
 #plot(grts_result, key.width = lcm(3))
 train_points_grts <- sp_rbind(grts_result_train)

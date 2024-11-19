@@ -1,7 +1,10 @@
 
 #install.packages("raster")
+# Load necessary libraries
+library(sf)    # For reading geospatial data
 library(raster)
 library (dplyr)
+library(spsurvey)
 setwd("~/FERIT_2/NISO/R_NISO")
 
 # Define the list of bird codes
@@ -41,16 +44,16 @@ print(prob_brick_current)
 
 
 # Print details of the resulting RasterBrick
-print(prob_brick)
+print(prob_brick_current)
 print(prob_brick_future)
 
 # Plot the second layer in the prob_brick
-plot(prob_brick[[2]], main = paste("Layer 2:", names(prob_brick)[2]))
-plot(prob_brick[[1]], main = paste("Layer 1:", names(prob_brick)[1]))
+plot(prob_brick_current[[2]], main = paste("Layer 2:", names(prob_brick_current)[2]))
+plot(prob_brick_future[[1]], main = paste("Layer 1:", names(prob_brick_future)[1]))
 
 
-# Load necessary libraries
-library(sf)    # For reading geospatial data
+#######################
+# code to create the point data file, combined_species_data
 
 # Define the path to the ESRI geodatabase
 gdb_path <- "D:/FERIT_1/NISO/Bird_Counts.gdb"
@@ -98,8 +101,7 @@ pointCount_locations <- pointCount_layer_utm %>%
 
 pointCount_locations$count <- 0
 
-
-################ View the result
+## View the result
 print(pointCount_locations)
 # Plot the unique locations
 plot(st_geometry(pointCount_locations), main = "Unique Survey Area Locations")
@@ -125,8 +127,7 @@ legend(
   title = "SpeciesCode"
 )
 ###############################
-
-
+# filter data and select fields
 # Initialize an empty list to store the resulting data frames
 species_dataframes <- list()
 
@@ -163,7 +164,7 @@ for (species in bird_code_list) {
 
 # View the first dataframe for ALFL for verification
 print(species_dataframes[["ALFL"]])
-# Combine all dataframes in the list into one sf object
+# Combine all dataframes in the list into one sf object, includes all spp
 combined_species_data <- bind_rows(species_dataframes)
 
 # View the combined data
@@ -179,41 +180,61 @@ species_count_summary <- combined_species_data %>%
   summarise(RecordCount = n(), .groups = 'drop') %>%
   arrange(SpeciesCode, count)
 
-# View the results
+# View and save the point data file
 print(species_count_summary)
+setwd("~/FERIT_2/NISO/R_NISO")
+saveRDS(combined_species_data, file = "combined_species_data.rds")
+#combined_species_data <- readRDS("combined_species_data.rds")
+
 
 #########################
 # GRTS sample selection
+species_data_list <- list()
+for (species in bird_code_list) {
 
-species <- "ALFL" #for testing only
+#species <- "ALFL" #for testing only
 # Filter combined data for the current SpeciesCode
-species_data_sf <- combined_data %>%
+selected_spp_sf <- combined_species_data %>%
   filter(SpeciesCode == species) %>%
   mutate(id = row_number())  # Add an ID column for reference
 # Add a new variable "status" based on the value of "count"
-species_data_sf <- species_data_sf %>%
+selected_spp_sf <- selected_spp_sf %>%
   mutate(status = ifelse(count == 0, "avail", "used"))
+nrow(selected_spp_sf)
 
-caty_n <- c(avail = 250, used = 250)
-strata_n <- c(avail = 250, used = 250)
-grts_result1 <- grts(species_data_sf, n_base = 500, caty_var = "status")
-grts_result2 <- grts(species_data_sf, n_base = 500, caty_var = "status", caty_n = caty_n) #unequal inclusion probability
-grts_result3 <- grts(species_data_sf, n_base = strata_n, stratum_var = "status") #equal inclusion probability, stratified by status
+# For selected spp, filter plot records with max count, can include multiple years
+selected_spp_maxCnt <- selected_spp_sf %>% group_by(SurveyAreaIdentifier) %>% filter(count == max(count)) %>% ungroup()
+nrow(selected_spp_maxCnt)
+# Now select unique values for plot (SurveyAreaIdentifer -- USAI)
+
+selected_spp_USAI <- selected_spp_maxCnt %>%
+  distinct(SurveyAreaIdentifier, .keep_all = TRUE)
+nrow(selected_spp_USAI)
+
+# Calculate 25% of records for each status
+avail_count <- nrow(selected_spp_USAI[selected_spp_USAI$status == "avail", ])
+used_count <- nrow(selected_spp_USAI[selected_spp_USAI$status == "used", ])
+avail_25 <- round(0.25 * avail_count)
+used_25 <- round(0.25 * used_count)
+caty_n <- c(avail = avail_25, used = used_25)
+n_base_val = avail_25 + used_25
+
+#GRTS sample
+grts_result_train <- grts(selected_spp_USAI, n_base = n_base_val, caty_var = "status", caty_n = caty_n) #unequal inclusion probability
 
 plot(
-  grts_result2,
+  grts_result_train,
   formula = siteuse ~ status,
-  species_data_sf,
+  selected_spp_USAI,
   key.width = lcm(3)
 )
 
-plot(grts_result2, key.width = lcm(3))
-plot(grts_result3, key.width = lcm(3))
+#plot(grts_result, key.width = lcm(3))
+train_points_grts <- sp_rbind(grts_result_train)
+nrow(train_points_grts)
+plot(train_points_grts[9]) # used and avail
 
-combined_grts <- sp_rbind(grts_result2)
-plot(combined_grts[9]) # used and avail
-
-species_count_summary <- combined_grts %>%
+species_count_summary <- train_points_grts %>%
   group_by(SpeciesCode, count) %>%
   summarise(RecordCount = n(), .groups = 'drop') %>%
   arrange(SpeciesCode, count)
@@ -221,6 +242,35 @@ species_count_summary <- combined_grts %>%
 # View the results
 print(species_count_summary)
 
+################
+# Now select the test data
+# Filter records where SurveyAreaIdentifier is not in grts_result_train
+test_points_grts <- selected_spp_USAI %>%
+  filter(!(SurveyAreaIdentifier %in% train_points_grts$SurveyAreaIdentifier))
+nrow(test_points_grts)
 
+species_data_list[[species]] <- list(
+  train_points_grts = train_points_grts,
+  test_points_grts = test_points_grts
+)
+
+}
 #########################################
+
+# Initialize an empty list to hold the dataframes with Species column
+combined_list <- lapply(names(species_data_list), function(species) {
+  # Add a column to both train and test dataframes
+  train <- species_data_list[[species]]$train_points_grts %>%
+    mutate(Species = species, DataType = "Train")
+  
+  test <- species_data_list[[species]]$test_points_grts %>%
+    mutate(Species = species, DataType = "Test")
+  
+  # Combine train and test for the current species
+  bind_rows(train, test)
+})
+
+# Combine all species data into a single dataframe
+final_combined_df <- bind_rows(combined_list)
+
 
